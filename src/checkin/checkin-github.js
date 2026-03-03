@@ -13,7 +13,7 @@ import { addAccountLoginInfo, getAccountLoginInfo } from '../api/index.js';
 import NotificationKit from '../utils/notify.js';
 import { generateTOTP } from '../utils/twofa.js';
 import path from 'path';
-import fs from 'fs';
+import fs, { truncateSync } from 'fs';
 
 class AnyRouterGitHubSignIn {
 	constructor(baseUrl = 'https://anyrouter.top') {
@@ -444,7 +444,7 @@ class AnyRouterGitHubSignIn {
 				});
 
 				// 等待页面完全加载
-				await this.randomDelay(1000, 2000);
+				await this.randomDelay(3000, 5000);
 
 				// 步骤4: 检查是否跳转到 GitHub 登录页面
 				const currentUrl = page.url();
@@ -458,84 +458,159 @@ class AnyRouterGitHubSignIn {
 				}
 
 				if (currentUrl.includes('github.com/login')) {
-					// 需要登录 GitHub
-					console.log('[GitHub] 检测到需要登录，开始填写 GitHub 账号...');
+					if (!currentUrl.includes('github.com/login/oauth')) {
+						// 需要登录 GitHub
+						console.log('[GitHub] 检测到需要登录，开始填写 GitHub 账号...');
 
-					// 等待登录表单加载
-					await page.waitForSelector('#login_field', { timeout: 10000 });
-					await this.randomDelay(500, 1000);
+						// 等待登录表单加载
+						await page.waitForSelector('#login_field', { timeout: 10000 });
+						await this.randomDelay(500, 1000);
 
-					// 输入用户名
-					console.log('[输入] 填写 GitHub 用户名...');
-					const usernameInput = page.locator('#login_field');
-					await usernameInput.click();
-					await this.randomDelay(300, 600);
+						// 输入用户名
+						console.log('[输入] 填写 GitHub 用户名...');
+						const usernameInput = page.locator('#login_field');
+						await usernameInput.click();
+						await this.randomDelay(300, 600);
 
-					// 模拟逐字输入
-					for (const char of username) {
-						await page.keyboard.type(char);
-						await this.randomDelay(50, 150);
+						// 模拟逐字输入
+						for (const char of username) {
+							await page.keyboard.type(char);
+							await this.randomDelay(50, 150);
+						}
+
+						// 输入密码
+						console.log('[输入] 填写 GitHub 密码...');
+						const passwordInput = page.locator('#password');
+						await passwordInput.click();
+						await this.randomDelay(300, 600);
+
+						// 模拟逐字输入密码
+						for (const char of password) {
+							await page.keyboard.type(char);
+							await this.randomDelay(50, 150);
+						}
+
+						await this.randomDelay(500, 1000);
+
+						// 点击登录按钮
+						console.log('[GitHub] 点击登录按钮...');
+						const loginButton = page.locator('input[type="submit"][value="Sign in"]');
+						await loginButton.click();
+
+						// 等待跳转
+						console.log('[等待] 等待 GitHub 登录完成...');
+						await this.randomDelay(5000, 6000);
+
 					}
 
-					// 输入密码
-					console.log('[输入] 填写 GitHub 密码...');
-					const passwordInput = page.locator('#password');
-					await passwordInput.click();
-					await this.randomDelay(300, 600);
-
-					// 模拟逐字输入密码
-					for (const char of password) {
-						await page.keyboard.type(char);
-						await this.randomDelay(50, 150);
-					}
-
-					await this.randomDelay(500, 1000);
-
-					// 点击登录按钮
-					console.log('[GitHub] 点击登录按钮...');
-					const loginButton = page.locator('input[type="submit"][value="Sign in"]');
-					await loginButton.click();
-
-					// 等待跳转
-					console.log('[等待] 等待 GitHub 登录完成...');
-					await this.randomDelay(3000, 5000);
 
 					// 检查当前 URL
 					const afterLoginUrl = page.url();
 					console.log(`[页面] 登录后 URL: ${afterLoginUrl}`);
 
 					// 步骤5a: 检查是否需要 TOTP 两步验证
-					if (afterLoginUrl.includes('/sessions/two-factor')) {
+
+					const verify2faNowButton = page.locator('button', { hasText: 'Verify 2FA now' });
+					const isVerify2faVisible = await verify2faNowButton.isVisible().catch(() => false);
+
+					if (afterLoginUrl.includes('/sessions/two-factor') || (afterLoginUrl.includes('login/oauth/authorize') && isVerify2faVisible)) {
 						if (!twofaSecret) {
 							console.log('[2FA] 检测到两步验证页面，但未提供 twofa_secret，登录失败');
 							return null;
 						}
+						let totpCode = "";
+						//第一次（存在缓存可能直接进入第二次两次验证的情况）
+						if (afterLoginUrl.includes('/sessions/two-factor')) {
+							console.log('[2FA] 检测到 TOTP 两步验证页面，生成验证码...');
+							totpCode = generateTOTP(twofaSecret);
+							console.log(`[2FA] 验证码已生成: ${totpCode}`);
 
-						console.log('[2FA] 检测到 TOTP 两步验证页面，生成验证码...');
-						const totpCode = generateTOTP(twofaSecret);
-						console.log(`[2FA] 验证码已生成: ${totpCode}`);
+							await this.randomDelay(1000, 2000);
 
-						await this.randomDelay(1000, 2000);
+							const otpInput = page.locator('#app_totp');
+							await otpInput.waitFor({ timeout: 10000 });
+							await otpInput.click();
+							await this.randomDelay(300, 600);
 
-						const otpInput = page.locator('#app_totp');
-						await otpInput.waitFor({ timeout: 10000 });
-						await otpInput.click();
-						await this.randomDelay(300, 600);
+							for (const char of totpCode) {
+								await page.keyboard.type(char);
+								await this.randomDelay(50, 100);
+							}
 
-						for (const char of totpCode) {
-							await page.keyboard.type(char);
-							await this.randomDelay(50, 100);
+							await this.randomDelay(3000, 5000);
+
+							// 如果验证码输入后页面未自动跳转，尝试点击提交按钮
+							if (page.url().includes('/sessions/two-factor')) {
+								const verifyButton = page.locator('button[type="submit"]:has-text("Verify")');
+								const isVerifyVisible = await verifyButton.isVisible().catch(() => false);
+								if (isVerifyVisible) {
+									await verifyButton.click();
+									await this.randomDelay(3000, 5000);
+								}
+							}
 						}
 
-						await this.randomDelay(2000, 3000);
+						// 处理二次 2FA 验证 (Verify 2FA now)
+						// 这种情况发生在点击 Verify 2FA now 按钮后，需要再次验证 TOTP
+						if (page.url().includes('login/oauth/authorize')) {
+							// 检查是否有 "Verify 2FA now" 按钮
+							const verify2faNowButton = page.locator('button', { hasText: 'Verify 2FA now' });
+							const isVerify2faVisible = await verify2faNowButton.isVisible().catch(() => false);
 
-						// 如果验证码输入后页面未自动跳转，尝试点击提交按钮
-						if (page.url().includes('/sessions/two-factor')) {
-							const verifyButton = page.locator('button[type="submit"]:has-text("Verify")');
-							const isVerifyVisible = await verifyButton.isVisible().catch(() => false);
-							if (isVerifyVisible) {
-								await verifyButton.click();
-								await this.randomDelay(3000, 5000);
+							if (isVerify2faVisible) {
+								console.log('[2FA] 检测到需要二次两步验证，点击 Verify 2FA now...');
+								await verify2faNowButton.click();
+								// await page.waitForLoadState('networkidle');
+								await this.randomDelay(2000, 3000);
+
+								console.log('当前url:', page.url());
+								// 检查是否进入了 two_factor_checkup 页面
+								if (page.url().includes('settings/two_factor_checkup')) {
+									console.log('[2FA] 进入两步验证检查页面，等待验证码刷新...');
+
+									// 确保生成一个新的验证码（与上一次不同）
+									// 为了安全起见，如果验证码相同则等待 30 秒，因为 GitHub 的 TOTP 窗口限制比较严格
+									await this.randomDelay(15000, 16000);
+									let newTotpCode = generateTOTP(twofaSecret);
+
+									if (newTotpCode === totpCode) {
+										console.log('[2FA] 验证码未变化，强制等待 15 秒以获取新验证码...');
+										await this.randomDelay(15000, 16000);
+										newTotpCode = generateTOTP(twofaSecret);
+									}
+
+									console.log(`[2FA] 生成新的验证码: ${newTotpCode}`);
+
+									// 输入新的验证码
+									const checkupInput = page.locator('input[name="app_otp"]');
+									if (await checkupInput.isVisible()) {
+										await checkupInput.click();
+										await this.randomDelay(300, 600);
+										for (const char of newTotpCode) {
+											await page.keyboard.type(char);
+											await this.randomDelay(50, 100);
+										}
+										await this.randomDelay(1000, 2000);
+
+										// 尝试点击 Verify 按钮
+										const checkupVerifyBtn = page.locator('button[type="submit"]:has-text("Verify")');
+										if (await checkupVerifyBtn.isVisible()) {
+											await checkupVerifyBtn.click();
+											await this.randomDelay(2000, 3000);
+										}
+									}
+
+									// 等待 Done 按钮出现并点击
+									const doneButton = page.locator('a', { hasText: 'Done' });
+									try {
+										await doneButton.waitFor({ state: 'visible', timeout: 15000 });
+										console.log('[2FA] 二次验证通过，点击 Done...');
+										await doneButton.click();
+										await this.randomDelay(3000, 5000);
+									} catch (e) {
+										console.log('[2FA] 未找到 Done 按钮或页面已自动跳转');
+									}
+								}
 							}
 						}
 
@@ -757,7 +832,6 @@ class AnyRouterGitHubSignIn {
 
 			if (apiUser && userData) {
 				// 根据账号配置管理令牌（删除和创建）
-				console.log(accountInfo.tokens,1231231231321)
 				if (accountInfo && accountInfo.tokens && Array.isArray(accountInfo.tokens)) {
 					console.log(
 						`[令牌管理] 发现账号配置中有 ${accountInfo.tokens.length} 个令牌配置，开始处理...`
@@ -860,7 +934,7 @@ class AnyRouterGitHubSignIn {
 								localStorage.clear();
 								sessionStorage.clear();
 							})
-							.catch(() => {});
+							.catch(() => { });
 						console.log('[清理] 已清除 AgentRouter localStorage 和 sessionStorage');
 					}
 				}

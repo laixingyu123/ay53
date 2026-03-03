@@ -654,7 +654,7 @@ if (isMainModule) {
 			// const userId = '68f98f2a2c5de7e57262ef43'; //Oliver
 			
 			// 使用 getAccountList 获取指定用户的账号列表
-			const apiResult = await getAccountList({ user_id: userId });
+			const apiResult = await getAccountList({ user_id: userId, account_type: 2 });
 
 			// 注释掉原有的 getCheckinableAccounts 方式
 			// const apiResult = await getCheckinableAccounts();
@@ -664,7 +664,7 @@ if (isMainModule) {
 				process.exit(1);
 			}
 
-			const accounts = apiResult.data;
+			const accounts = apiResult.data.slice(-1);
 			console.log(`[成功] 获取到 ${accounts.length} 个账号`);
 
 			accounts.forEach(item=>{
