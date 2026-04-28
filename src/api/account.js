@@ -762,10 +762,10 @@ export async function getAccountList(params) {
 	}
 
 	// 验证 account_type 必须为有效值（如果提供）
-	if (account_type !== undefined && ![0, 1, 2, 3].includes(account_type)) {
+	if (account_type !== undefined && ![0, 1, 2, 3, 4].includes(account_type)) {
 		return {
 			success: false,
-			error: 'account_type 必须为 0、1、2 或 3',
+			error: 'account_type 必须为 0、1、2、3 或 4',
 		};
 	}
 

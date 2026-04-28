@@ -22,3 +22,10 @@ export { uploadImage } from './upload.js';
 export { addEmail, getLatestEmail, queryEmails } from './email.js';
 export { addKey, addKeys, updateKeyInfo } from './ai-key.js';
 export { addEmailAccount, updateEmailAccount } from './email-account.js';
+export {
+	getAllAccountList,
+	getAllAccountDetail,
+	updateAllAccount,
+	deleteAllAccount,
+	unbindAnyRouter,
+} from './all-account.js';

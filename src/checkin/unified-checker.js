@@ -7,6 +7,7 @@ import AnyRouterSignIn from './checkin-username.js';
 import AnyRouterLinuxDoSignIn from './checkin-linuxdo.js';
 import AnyRouterGitHubSignIn from './checkin-github.js';
 import AnyRouterSessionSignIn from './checkin-session.js';
+import AnyRouterSystemTokenSignIn from './checkin-system-token.js';
 import {
 	updateAccountInfo as updateAccountInfoAPI,
 	getLinuxDoAccountsWithSession,
@@ -31,6 +32,7 @@ class UnifiedAnyRouterChecker {
 		this.signInModule = new AnyRouterSignIn();
 		this.githubSignInModule = new AnyRouterGitHubSignIn();
 		this.sessionSignInModule = new AnyRouterSessionSignIn();
+		this.systemTokenSignInModule = new AnyRouterSystemTokenSignIn();
 		// LinuxDo 签到模块在需要时动态创建，因为需要传入不同的平台 URL
 	}
 
@@ -482,11 +484,115 @@ class UnifiedAnyRouterChecker {
 	}
 
 	/**
+	 * 使用系统令牌进行签到（account_type=4）
+	 */
+	async checkInWithSystemToken(accountInfo) {
+		const accountName = accountInfo.username || accountInfo._id || '未知账号';
+		const systemToken = accountInfo.system_token;
+		const apiUser = accountInfo.account_id || accountInfo.api_user;
+
+		if (!systemToken) {
+			return {
+				success: false,
+				account: accountName,
+				error: '缺少 system_token',
+				method: 'system_token',
+			};
+		}
+
+		if (!apiUser) {
+			return {
+				success: false,
+				account: accountName,
+				error: '缺少 account_id',
+				method: 'system_token',
+			};
+		}
+
+		console.log(`[登录] ${accountName}: 使用系统令牌签到 (API User: ${apiUser})`);
+
+		const platformType = accountInfo.platform_type || 'anyrouter';
+		const platform = PLATFORM_CONFIG[platformType];
+
+		if (!platform) {
+			return {
+				success: false,
+				account: accountName,
+				error: `未知的平台类型: ${platformType}`,
+				method: 'system_token',
+			};
+		}
+
+		// 为目标平台创建独立的系统令牌签到实例
+		const systemTokenModule = new AnyRouterSystemTokenSignIn(platform.url);
+		const signInResult = await systemTokenModule.signIn(systemToken, apiUser, accountInfo);
+
+		if (signInResult && signInResult.success) {
+			const updateData = {
+				checkin_date: Date.now(),
+			};
+
+			let userInfoText = null;
+
+			if (signInResult.userInfo) {
+				if (signInResult.userInfo.status === 2) {
+					updateData.is_banned = true;
+					console.log(`[警告] ${accountName}: 账号已被封禁，更新封禁状态`);
+				} else {
+					updateData.is_banned = false;
+				}
+
+				updateData.balance = Math.round(signInResult.userInfo.quota / 500000);
+				updateData.used = Math.round((signInResult.userInfo.usedQuota || 0) / 500000);
+				if (signInResult.userInfo.affCode) {
+					updateData.aff_code = signInResult.userInfo.affCode;
+				}
+				if (signInResult.userInfo.tokens) {
+					updateData.tokens = signInResult.userInfo.tokens;
+					const unlimitedToken = signInResult.userInfo.tokens.find((t) => t.unlimited_quota);
+					if (unlimitedToken) {
+						updateData.first_unlimited_key = unlimitedToken.key;
+					}
+					delete signInResult.userInfo.tokens;
+				}
+
+				updateData.userInfo = signInResult.userInfo;
+
+				const quota = (signInResult.userInfo.quota / 500000).toFixed(2);
+				const usedQuota = (signInResult.userInfo.usedQuota || 0) / 500000;
+				const bannedText = signInResult.userInfo.status === 2 ? ' 🚫 检测到账号被官方封禁，不再签到' : '';
+				userInfoText = `💰 当前余额: $${quota}, 已使用: $${usedQuota.toFixed(2)}${bannedText}`;
+			}
+
+			await this.updateAccountInfo(accountInfo._id, updateData);
+
+			return {
+				success: true,
+				account: accountName,
+				userInfo: userInfoText,
+				method: 'system_token',
+			};
+		} else {
+			return {
+				success: false,
+				account: accountName,
+				error: signInResult?.error || '系统令牌签到失败',
+				method: 'system_token',
+			};
+		}
+	}
+
+	/**
 	 * 为单个账号执行签到
 	 */
 	async checkInAccount(accountInfo, accountIndex) {
 		const accountName = accountInfo.username || accountInfo._id || `账号 ${accountIndex + 1}`;
 		console.log(`\n[处理中] 开始处理 ${accountName}`);
+
+		// 系统令牌登录不需要 session 和 username/password，直接走专属流程
+		const accountType = accountInfo.account_type ?? 0;
+
+
 
 		// 优先检查是否有 session 和 api_user/account_id
 		const hasSession = accountInfo.session && (accountInfo.account_id || accountInfo.api_user);
@@ -504,6 +610,13 @@ class UnifiedAnyRouterChecker {
 			console.log(`[回退] ${accountName}: Session 签到失败，尝试其他登录方式...`);
 		}
 
+
+		if (accountType === 4) {
+			console.log(`[类型] ${accountName}: 系统令牌登录`);
+			return await this.checkInWithSystemToken(accountInfo);
+		}
+
+
 		const hasPassword = accountInfo.username && accountInfo.password;
 
 		if (!hasPassword) {
@@ -514,9 +627,6 @@ class UnifiedAnyRouterChecker {
 				error: '缺少用户名或密码',
 			};
 		}
-
-		// 获取登录类型（默认为账号密码登录）
-		const accountType = accountInfo.account_type ?? 0;
 
 		// 根据登录类型选择对应的登录方法
 		switch (accountType) {
@@ -534,6 +644,11 @@ class UnifiedAnyRouterChecker {
 			// GitHub 第三方登录
 			console.log(`[类型] ${accountName}: GitHub 第三方登录`);
 			return await this.checkInWithGitHub(accountInfo);
+
+		case 4:
+			// 系统令牌登录
+			console.log(`[类型] ${accountName}: 系统令牌登录`);
+			return await this.checkInWithSystemToken(accountInfo);
 
 		default:
 			console.log(`[失败] ${accountName}: 未知的登录类型 ${accountType}`);
@@ -671,7 +786,7 @@ if (isMainModule) {
 			// const userId = "69aba9e3db447c164c0ff80d"; //hezuo
 			// const userId = "69b4cf81f7ac1a41a13b8981"; //hezuo2
 			// 使用 getAccountList 获取指定用户的账号列表
-			const apiResult = await getAccountList({ user_id: userId, account_type: 2 });
+			const apiResult = await getAccountList({ user_id: userId, account_type: 4 });
 
 			// 注释掉原有的 getCheckinableAccounts 方式
 			// const apiResult = await getCheckinableAccounts();
@@ -681,14 +796,14 @@ if (isMainModule) {
 				process.exit(1);
 			}
 
-			// const accounts = apiResult.data
+			const accounts = apiResult.data
 
-			const accounts = apiResult.data.filter(account => account.username === 'cpkvh912nj');
+			// const accounts = apiResult.data.filter(account => account.username === 'k3vnor7sre');
 			console.log(`[成功] 获取到 ${accounts.length} 个账号`);
 
-			accounts.forEach(item=>{
-				item.session = ""
-			})
+			// accounts.forEach(item=>{
+			// 	item.session = ""
+			// })
 
 			if (accounts.length === 0) {
 				console.log('[完成] 没有需要签到的账号，程序退出');
